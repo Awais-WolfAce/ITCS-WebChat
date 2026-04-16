@@ -1,0 +1,14 @@
+[project]
+name = "itcs"
+version = "0.1.0"
+description = "RAG-based chat agent using Azure OpenAI and Azure AI Search"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "openai",
+    "python-dotenv",
+    "httpx",
+    "python-multipart",
+]
