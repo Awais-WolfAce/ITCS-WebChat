@@ -8,13 +8,37 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
 from modules.chat import ChatAgent
-from modules.intent import is_chitchat
+from modules.intent import (
+    CHITCHAT_INTENTS,
+    META_INTENTS,
+    Intent,
+    classify_intent,
+)
 from modules.stt import SpeechToText
 from modules.translation import Translator
 from modules.tts import TextToSpeech
+
+# Intents that get a deterministic canned reply instead of calling the LLM.
+CANNED_INTENTS: frozenset[Intent] = frozenset(
+    {
+        Intent.APPRECIATION,
+        Intent.APOLOGY,
+        Intent.GOODBYE,
+        Intent.BOT_IDENTITY,
+        Intent.BOT_CAPABILITY,
+        Intent.COMPLAINT,
+        Intent.FEEDBACK,
+        Intent.SESSION_RESET,
+        Intent.HUMAN_HANDOFF,
+        Intent.PROVIDE_CONTACT_INFO,
+        Intent.OUT_OF_SCOPE,
+        Intent.FALLBACK,
+    }
+)
 
 load_dotenv()
 
@@ -22,6 +46,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ITCS Chat Agent")
+
+
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+app.add_middleware(NoCacheStaticMiddleware)
 
 agent = ChatAgent()
 translator = Translator()
@@ -45,7 +80,10 @@ class TTSRequest(BaseModel):
 
 @app.get("/")
 async def index():
-    return FileResponse("static/index.html")
+    return FileResponse(
+        "static/index.html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/stt")
@@ -65,14 +103,23 @@ async def chat(request: ChatRequest):
     english_messages = messages.copy()
     english_messages[-1] = {"role": "user", "content": english_text}
 
-    chitchat = is_chitchat(english_text)
-    logger.info("Intent: %s | lang: %s", "chitchat" if chitchat else "knowledge", source_lang)
+    intent = classify_intent(english_text)
+    logger.info("Intent: %s | lang: %s", intent.value, source_lang)
+
+    def _select_stream():
+        if intent in CANNED_INTENTS:
+            return agent.stream_canned(intent.value)
+        if intent in CHITCHAT_INTENTS:
+            return agent.stream_chitchat(english_messages)
+        if intent in META_INTENTS:
+            return agent.stream_meta(english_messages)
+        # Knowledge intents (ask_*) and anything else → RAG over the search index.
+        return agent.stream(english_messages)
 
     def event_stream():
         try:
-            stream_fn = agent.stream_chitchat if chitchat else agent.stream
             full_response = ""
-            for chunk in stream_fn(english_messages):
+            for chunk in _select_stream():
                 full_response += chunk
 
             if source_lang != "en":

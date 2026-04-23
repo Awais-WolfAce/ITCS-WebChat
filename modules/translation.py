@@ -38,7 +38,7 @@ class Translator:
             "Ocp-Apim-Subscription-Region": self.region,
             "Content-Type": "application/json",
         }
-        self._client = httpx.Client(timeout=10)
+        self._client = httpx.Client(timeout=30)
 
     # ── public API ───────────────────────────────────────────
 
