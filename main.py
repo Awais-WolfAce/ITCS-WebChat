@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -18,6 +19,7 @@ from modules.intent import (
     Intent,
     classify_intent,
 )
+from modules.session import SessionManager
 from modules.stt import SpeechToText
 from modules.translation import Translator
 from modules.tts import TextToSpeech
@@ -45,7 +47,20 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ITCS Chat Agent")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    sessions.start_sweeper()
+    try:
+        yield
+    finally:
+        await sessions.stop_sweeper()
+        # Flush any still-active sessions so their final email goes out
+        # before the process exits.
+        sessions.end_all(reason="shutdown")
+
+
+app = FastAPI(title="ITCS Chat Agent", lifespan=lifespan)
 
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
@@ -62,6 +77,7 @@ agent = ChatAgent()
 translator = Translator()
 stt = SpeechToText()
 tts = TextToSpeech()
+sessions = SessionManager()
 
 
 class Message(BaseModel):
@@ -71,11 +87,16 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[Message]
+    user_id: str | None = None
 
 
 class TTSRequest(BaseModel):
     text: str
     lang: str = "en"
+
+
+class SessionEndRequest(BaseModel):
+    user_id: str
 
 
 @app.get("/")
@@ -104,7 +125,16 @@ async def chat(request: ChatRequest):
     english_messages[-1] = {"role": "user", "content": english_text}
 
     intent = classify_intent(english_text)
-    logger.info("Intent: %s | lang: %s", intent.value, source_lang)
+    # Resolve / mint the conversation id BEFORE streaming so the client
+    # can pick it up on the very first turn (or whenever its stored id
+    # was already swept due to idle timeout).
+    user_id = sessions.get_or_create_user_id(request.user_id)
+    logger.info(
+        "Intent: %s | lang: %s | userId: %s",
+        intent.value,
+        source_lang,
+        user_id,
+    )
 
     def _select_stream():
         if intent in CANNED_INTENTS:
@@ -113,12 +143,12 @@ async def chat(request: ChatRequest):
             return agent.stream_chitchat(english_messages)
         if intent in META_INTENTS:
             return agent.stream_meta(english_messages)
-        # Knowledge intents (ask_*) and anything else → RAG over the search index.
+        # Knowledge intents (ask_*) and anything else -> RAG over the search index.
         return agent.stream(english_messages)
 
     def event_stream():
+        full_response = ""
         try:
-            full_response = ""
             for chunk in _select_stream():
                 full_response += chunk
 
@@ -129,13 +159,75 @@ async def chat(request: ChatRequest):
             else:
                 translated = full_response
 
-            yield f"data: {json.dumps({'content': translated, 'lang': source_lang})}\n\n"
+            payload = {
+                "content": translated,
+                "lang": source_lang,
+                "user_id": user_id,
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
         except Exception as exc:
             logger.exception("Chat stream error")
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-        yield "data: [DONE]\n\n"
+            yield f"data: {json.dumps({'error': str(exc), 'user_id': user_id})}\n\n"
+            full_response = ""  # don't log a partial/failed reply
+        finally:
+            if full_response:
+                # Record the turn (and fire the per-row Power Automate
+                # POST) only after the final, translated reply has been
+                # produced. Failures are swallowed inside the logger so
+                # the chat stream cannot be broken by a flow outage.
+                try:
+                    sessions.record_turn(
+                        user_id=user_id,
+                        user_input=latest_user_text,
+                        bot_output=translated,
+                        language=source_lang,
+                    )
+                except Exception:
+                    logger.exception("Failed to record chat turn")
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/chat/end")
+async def chat_end(request: Request):
+    """Tab-close / explicit end notification from the browser.
+
+    Accepts both a JSON body (regular fetch) and an
+    ``application/x-www-form-urlencoded`` body, because
+    ``navigator.sendBeacon`` defaults to the latter content type and we
+    want to support both delivery paths.
+    """
+
+    user_id: str | None = None
+    content_type = (request.headers.get("content-type") or "").lower()
+    try:
+        if "application/json" in content_type:
+            body = await request.json()
+            user_id = (body or {}).get("user_id")
+        else:
+            # sendBeacon with a Blob of type text/plain or form-encoded
+            # arrives here. Try form first, then raw text as JSON.
+            raw = await request.body()
+            if not raw:
+                user_id = None
+            else:
+                text = raw.decode("utf-8", errors="ignore").strip()
+                try:
+                    user_id = (json.loads(text) or {}).get("user_id")
+                except json.JSONDecodeError:
+                    # Fallback: form-encoded "user_id=..."
+                    from urllib.parse import parse_qs
+
+                    parsed = parse_qs(text)
+                    vals = parsed.get("user_id") or []
+                    user_id = vals[0] if vals else None
+    except Exception:
+        logger.exception("Failed to parse /api/chat/end body")
+
+    if user_id:
+        sessions.end_session(user_id, reason="client-end")
+    return Response(status_code=204)
 
 
 @app.post("/api/tts")

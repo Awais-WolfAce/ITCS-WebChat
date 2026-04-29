@@ -25,6 +25,27 @@
   let history = [];
   let busy    = false;
 
+  /* ── Conversation id ──────────────────────────
+     The server is authoritative: we send whatever id we have stored
+     (may be null on first turn) and adopt whatever id comes back. If
+     our stored id has already expired server-side (idle timeout), the
+     server will mint a new one and the next response will return that
+     new id, which we save. Per-tab storage means a fresh tab / new
+     window starts a new conversation; reload of the same tab keeps it.
+     -------------------------------------------- */
+  const USER_ID_KEY = "itcs_chat_user_id";
+  function getUserId() {
+    try { return sessionStorage.getItem(USER_ID_KEY); }
+    catch { return null; }
+  }
+  function setUserId(id) {
+    if (!id) return;
+    try { sessionStorage.setItem(USER_ID_KEY, id); } catch {}
+  }
+  function clearUserId() {
+    try { sessionStorage.removeItem(USER_ID_KEY); } catch {}
+  }
+
   /* ════════════════════════════════════════════
      SHARED HELPERS
      ════════════════════════════════════════════ */
@@ -85,11 +106,52 @@
   }
 
   function inlineFormat(s) {
-    return s
+    // Stash linkified spans in placeholders so later markdown passes
+    // (bold/italic, etc.) cannot break the generated <a> tags.
+    const stash = [];
+    const ph = () => `\u0000L${stash.length - 1}\u0000`;
+    const a = (href, text) => {
+      const isExternal = /^https?:/i.test(href);
+      const attrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : "";
+      stash.push(`<a href="${href}"${attrs}>${text}</a>`);
+      return ph();
+    };
+
+    s = s.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+|tel:[^\s)]+)\)/g,
+      (_, text, url) => a(url, text)
+    );
+
+    s = s.replace(
+      /&lt;(https?:\/\/[^\s&]+)&gt;/g,
+      (_, url) => a(url, url)
+    );
+
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, lead, url) => {
+      let trail = "";
+      const m = url.match(/[).,;:!?'"]+$/);
+      if (m) { trail = m[0]; url = url.slice(0, -trail.length); }
+      return `${lead}${a(url, url)}${trail}`;
+    });
+
+    s = s.replace(
+      /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g,
+      (m) => a(`mailto:${m}`, m)
+    );
+
+    s = s.replace(/(\+\d[\d\s().-]{6,}\d)/g, (m) => {
+      const tel = m.replace(/[^\d+]/g, "");
+      return a(`tel:${tel}`, m.trim());
+    });
+
+    s = s
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/__(.+?)__/g, "<strong>$1</strong>")
       .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>")
       .replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, "<em>$1</em>");
+
+    s = s.replace(/\u0000L(\d+)\u0000/g, (_, i) => stash[+i]);
+    return s;
   }
 
   function addMessage(role, text) {
@@ -123,7 +185,7 @@
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: msgs }),
+      body: JSON.stringify({ messages: msgs, user_id: getUserId() }),
     });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -139,6 +201,7 @@
         if (payload === "[DONE]") break;
         try {
           const d = JSON.parse(payload);
+          if (d.user_id) setUserId(d.user_id);
           if (d.error) throw new Error(d.error);
           if (d.content) botText = d.content;
           if (d.lang) lang = d.lang;
@@ -147,6 +210,41 @@
     }
     return { text: botText, lang };
   }
+
+  /* ── End-of-session beacon ─────────────────────
+     Best-effort notify the server when the tab is closing or hidden
+     for good, so the session-end email fires immediately instead of
+     waiting for the idle timeout. Uses sendBeacon (queued by the
+     browser even after the page is unloading); falls back to a
+     keepalive fetch if sendBeacon isn't available.
+     -------------------------------------------- */
+  function sendEndBeacon() {
+    const id = getUserId();
+    if (!id) return;
+    const url = "/api/chat/end";
+    const body = JSON.stringify({ user_id: id });
+    try {
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], { type: "application/json" });
+        navigator.sendBeacon(url, blob);
+        return;
+      }
+    } catch {}
+    try {
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive: true,
+      });
+    } catch {}
+  }
+  // pagehide fires on tab close, window close, and full-page navigation
+  // away. It does NOT fire on a quick tab switch (the user clicking
+  // back to another tab and returning), so the session stays alive
+  // across brief context switches and only the 60s idle sweeper can
+  // expire it in those cases.
+  window.addEventListener("pagehide", sendEndBeacon);
 
   /* ════════════════════════════════════════════
      TEXT CHAT
