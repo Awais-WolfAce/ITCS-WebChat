@@ -269,7 +269,7 @@ SYSTEM_PROMPT = (
     "- Use the Azure AI Search index as the single source of truth.\n"
     "- Do NOT use general knowledge, assumptions, training data, or external sources.\n"
     "- Do NOT infer or guess missing information.\n"
-    "- If the answer is not found in the retrieved documents, craft a "
+    "- If the answer is not found, craft a "
     "short, dynamic reply in your own words that:\n"
     "    (a) briefly acknowledges the specific topic the user asked about "
     "(paraphrase it, don't repeat it verbatim),\n"

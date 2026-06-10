@@ -45,6 +45,7 @@ class Intent(str, Enum):
     ASK_COMPARISON = "ask_comparison"
     ASK_RECOMMENDATION = "ask_recommendation"
     ASK_TROUBLESHOOTING = "ask_troubleshooting"
+    ASK_PRICE = "ask_price"     
 
     # ---- Routing / escalation --------------------------------------------
     PROVIDE_CONTACT_INFO = "provide_contact_info"
@@ -63,6 +64,7 @@ CHITCHAT_INTENTS: frozenset[Intent] = frozenset(
         Intent.COMPLIMENT,
         Intent.BOT_IDENTITY,
         Intent.BOT_CAPABILITY,
+        
     }
 )
 
@@ -89,6 +91,7 @@ KNOWLEDGE_INTENTS: frozenset[Intent] = frozenset(
         Intent.ASK_COMPARISON,
         Intent.ASK_RECOMMENDATION,
         Intent.ASK_TROUBLESHOOTING,
+        Intent.ASK_PRICE, 
     }
 )
 
@@ -215,7 +218,42 @@ _TROUBLE_WORDS = (
     # Help-me-fix verbs.
     r"|fix|troubleshoot|debug|help\s*me\s*(fix|solve)|theek\s*kar(o|na|do)|hal\s*karo"
 )
-
+# Price / quotation / commercial queries (English + Roman Urdu + SMS shorthands).
+_PRICE_WORDS = (
+    # ── direct price / cost asks ────────────────────────────────────────
+    r"price|prices|pricing|cost|costs|charges?|fee|fees|rate|rates"
+    r"|how\s*much|kitna\s*(hai|hoga|lagta|parta)|kitni\s*(hai|hogi|lagti|parti)"
+    r"|kya\s*qeemat|kya\s*keemat|qeemat\s*kya|keemat\s*kya"
+    r"|kitna\s*paisa|kitne\s*paise|kitna\s*rupees?|amount"
+    # ── quotation / estimate ─────────────────────────────────────────────
+    r"|quot(e|ation)|quotations?|estimate|estimates?|proposal"
+    r"|qoute|qoutation"                          # common misspellings
+    r"|send\s*(me\s*)?(a\s*)?(quote|quotation|proposal|estimate)"
+    r"|quote\s*(bhejo|karo|do|dein|send\s*karo)"
+    r"|quotation\s*(chahiye|chahye|do|dein|bhejo|send\s*karo)"
+    # ── packages / plans / bundles ───────────────────────────────────────
+    r"|package|packages|plan|plans|bundle|bundles"
+    r"|monthly\s*(plan|package|cost|price|charges?)"
+    r"|yearly\s*(plan|package|cost|price|charges?)"
+    r"|annual\s*(plan|package|cost|price|charges?)"
+    r"|subscription\s*(cost|price|charges?|fee)"
+    # ── discounts / deals / offers ───────────────────────────────────────
+    r"|discount|discounts?|promo|promotion|offer|offers?|deal|deals?"
+    r"|special\s*(price|offer|rate|deal)|best\s*price|last\s*price|final\s*price"
+    r"|koi\s*(offer|discount|deal)\s*(hai|hy|h)?"
+    r"|sale|clearance|reduced|reduction"
+    # ── affordability / budget ───────────────────────────────────────────
+    r"|budget|affordable|reasonable|cheap|sasta|sasti|mehnga|mehngi|expensive"
+    r"|value\s*for\s*money|cost[\s\-]?effective|economical"
+    # ── billing / invoice / tax ──────────────────────────────────────────
+    r"|invoice|bill|receipt|billing|tax\s*invoice|gst|vat"
+    r"|payment\s*(plan|schedule|option|method)"
+    r"|installment|installments?|qist|qisti|emi"
+    r"|advance|down\s*payment|partial\s*payment"
+    # ── trial / demo ─────────────────────────────────────────────────────
+    r"|free\s*trial|trial\s*period|trial\s*available|demo\s*(available|chahiye|milega)"
+    r"|try\s*for\s*free|kya\s*(free|trial|demo)\s*(hai|hy|milta|milti)?"
+)
 # Compositional heuristic: a "loading / hang / stuck / not working / nothing
 # happens" verb co-occurring with a UI action ("submit / click / press / tap /
 # button / form / page / website") in either order is a clear trouble report.
@@ -469,6 +507,16 @@ _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
         r"|^(what\'?s?\s*up|sup|how\s*is\s*it\s*going|how\'?s?\s*it\s*going)\b"
         rf"|^({_GREETING_HOW_ARE_YOU})\b"
     )),
+
+    # In the _INTENT_PATTERNS list, REPLACE this existing entry:
+    (Intent.ASK_COMPARISON, _p(r"\b(compare|comparison|vs\.?|versus| ... )\b")),
+
+# WITH these two entries (price first, then comparison):
+    # ---- Ask price / quotation ------------------------------------------
+    (Intent.ASK_PRICE, _p(rf"\b({_PRICE_WORDS})\b")),
+
+    # ---- Ask comparison --------------------------------------------------
+    (Intent.ASK_COMPARISON, _p(r"\b(compare|comparison|vs\.?|versus|difference\s*between|differences\s*between|which\s*is\s*(better|best)|pros\s*and\s*cons|better\s*than|farq\s*(kya|kia))\b")),
 ]
 
 
