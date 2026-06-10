@@ -3,6 +3,10 @@
 Classifies the latest user message into one of the supported :class:`Intent`
 values and groups intents into broad categories so the chat layer can route
 them appropriately (chitchat vs. knowledge retrieval vs. meta/control, etc.).
+
+v2 — entities enriched from:
+  • itcs_xtra.pdf        (careers / HR canned responses)
+  • Products_Partners_Customers.pdf  (products, partners, customers, pricing)
 """
 
 from __future__ import annotations
@@ -45,7 +49,15 @@ class Intent(str, Enum):
     ASK_COMPARISON = "ask_comparison"
     ASK_RECOMMENDATION = "ask_recommendation"
     ASK_TROUBLESHOOTING = "ask_troubleshooting"
-    ASK_PRICE = "ask_price"     
+    ASK_PRICE = "ask_price"
+
+    # ---- NEW: Careers / HR -----------------------------------------------
+    ASK_CAREERS = "ask_careers"
+
+    # ---- NEW: Products / Services / Partners / Customers -----------------
+    ASK_PRODUCTS = "ask_products"
+    ASK_PARTNERS = "ask_partners"
+    ASK_CUSTOMERS = "ask_customers"
 
     # ---- Routing / escalation --------------------------------------------
     PROVIDE_CONTACT_INFO = "provide_contact_info"
@@ -64,7 +76,6 @@ CHITCHAT_INTENTS: frozenset[Intent] = frozenset(
         Intent.COMPLIMENT,
         Intent.BOT_IDENTITY,
         Intent.BOT_CAPABILITY,
-        
     }
 )
 
@@ -91,7 +102,11 @@ KNOWLEDGE_INTENTS: frozenset[Intent] = frozenset(
         Intent.ASK_COMPARISON,
         Intent.ASK_RECOMMENDATION,
         Intent.ASK_TROUBLESHOOTING,
-        Intent.ASK_PRICE, 
+        Intent.ASK_PRICE,
+        Intent.ASK_CAREERS,
+        Intent.ASK_PRODUCTS,
+        Intent.ASK_PARTNERS,
+        Intent.ASK_CUSTOMERS,
     }
 )
 
@@ -111,27 +126,19 @@ def _p(pattern: str) -> re.Pattern[str]:
 
 # ---------------------------------------------------------------------------
 # Reusable phrase groups (English, broken English, SMS-shorthand, Roman Urdu).
-# Keep these as plain alternation strings so we can compose larger patterns.
 # ---------------------------------------------------------------------------
 
-# Greetings: English + SMS shortenings + Roman Urdu salutations.
 _GREETING_WORDS = (
     r"hi+|hello+|hey+|heyy+|hay|hii+|helo|hlo|hallo|howdy|hiya|yo+|greetings"
     r"|salaam|salam|aslam|asalam|asalamualaikum|assalam[ou]?\s*alaikum|aoa|slm"
 )
 
-# Roman Urdu "how are you" style openers.
 _GREETING_HOW_ARE_YOU = (
     r"(aap|tum|tu)\s*(kese|kaise|kaisi|kesa|kaisa)\s*(ho|hain|hai)"
     r"|k(i|y)a\s*(hal|haal)(\s*(hai|hain|chal\s*raha))?"
     r"|kese\s*ho|kesa\s*hai|theek\s*ho|all\s*good"
 )
 
-# Goodbyes / chat-end phrases.
-# Note: order matters inside the alternation - put multi-word forms like
-# "good bye" / "bye bye" BEFORE the bare "bye+" token so the longer match
-# wins and we don't accidentally classify "good bye" as a partial match
-# that falls through to FALLBACK.
 _GOODBYE_WORDS = (
     r"good[\s\-]*bye|bye[\s\-]*bye|bye+|see\s*(you|ya)|take\s*care"
     r"|good\s*night|gn|cya"
@@ -139,7 +146,6 @@ _GOODBYE_WORDS = (
     r"|khuda\s*hafiz|allah\s*hafiz|alvida"
 )
 
-# Thanks: English + abbreviations + Roman Urdu / Arabic-borrowed.
 _THANKS_WORDS = (
     r"thanks?|thank\s*you|thankyou|thnx|thnks|thanx|thx|ty|tysm"
     r"|shukriya|shukria|shukrya|shukariya"
@@ -148,7 +154,6 @@ _THANKS_WORDS = (
     r"|jazak\s*allah(\s*khair(an)?)?|jazakallah(\s*khair(an)?)?|jzk"
 )
 
-# Apologies (English + Roman Urdu).
 _APOLOGY_WORDS = (
     r"sorry|my\s*(bad|apologies)|(i\s*)?apologize|apologies|i\'?m\s*sorry"
     r"|excuse\s*me|pardon\s*me"
@@ -157,7 +162,6 @@ _APOLOGY_WORDS = (
     r"|galti\s*ho\s*(gai|gayi|gaya)"
 )
 
-# Negative sentiment / complaint markers (English + Roman Urdu).
 _COMPLAINT_WORDS = (
     r"useless|terrible|awful|horrible|stupid|dumb"
     r"|bad\s*(bot|answer|response|service|experience)"
@@ -168,96 +172,281 @@ _COMPLAINT_WORDS = (
     r"|ghalat\s*(jawab|service|info)"
 )
 
-# Trouble / brokenness / glitch words (English + Roman Urdu).
 _TROUBLE_WORDS = (
     r"not\s*working|doesn\'?t\s*work|isn\'?t\s*working|broken|defective"
     r"|error(\s*aa\s*raha|\s*code|\s*message)?|failed|failing|fail"
     r"|issue|problem|bug|glitch|fault|kharab|kharaab"
-    # Generic "not / doesn't / won't / can't + action verb" so phrases like
-    # 'page not opening', 'form not submitting', 'site won't load',
-    # 'video doesn't play', 'login not happening' route to troubleshooting.
     r"|(not|doesn\'?t|don\'?t|isn\'?t|won\'?t|wont|cannot|can\'?t|cant|unable\s*to)"
     r"\s*(work(ing)?|open(ing)?|load(ing)?|launch(ing)?|respond(ing)?"
     r"|start(ing)?|connect(ing)?|submit(ting)?|save|saving|send(ing)?"
     r"|appear(ing)?|show(ing)?|happen(ing)?|run(ning)?|play(ing)?"
     r"|display(ing)?|updat(e|ing)|refresh(ing)?|click(ing)?|press(ing)?"
     r"|login|log\s*in|sign\s*in|access(ing)?|reach(ing)?)"
-    # Hangs / crashes / freezes (cover plural / -ing / Roman Urdu forms).
     r"|crash(es|ed|ing|\s*ho\s*(jata|jati|jaa))?"
     r"|hangs?|hanging|hang\s*ho\s*(jata|jati)"
     r"|stuck|frozen|freeze(s|d|n)?|freezing"
-    # Page / form / submit / button stays in a loading state forever.
     r"|loading|loads?|loaded\s*nahi"
     r"|(keeps?|still|stuck|endless(ly)?|forever|infinite(ly)?|long\s*time)\s*loading"
     r"|loading\s*(forever|hi|hee|aa\s*raha|aati\s*hai|aata\s*hai|hota\s*hai|hoti\s*hai|rehta\s*hai|rehti\s*hai|nahi\s*ruk(ti|ta)?)"
     r"|won\'?t\s*load|wont\s*load|doesn\'?t\s*load|did\s*not\s*load"
     r"|cannot\s*load|can\'?t\s*load|fails?\s*to\s*load|fail\s*to\s*load"
-    # "Nothing happens after I click" / Roman Urdu equivalent.
     r"|nothing\s*happens|nothing\s*is\s*happening"
     r"|kuch\s*(nahi|ni|na)\s*(hota|hoti|ho\s*raha|ho\s*rahi)"
-    # Page / site won't open.
     r"|page\s*(nahi\s*khul(ta|ti|raha|rahi)?|nahi\s*chal(ta|ti|raha|rahi)?)"
     r"|nahi\s*khul(ta|ti|raha|rahi)?|khulta\s*nahi|khulti\s*nahi"
     r"|open\s*nahi\s*ho(ta|ti|\s*raha|\s*rahi)?"
-    # Slowness.
     r"|slow|lag(g(ed|ing))?|laggy|heavy|delay(ed|ing)?"
-    # Generic "can't login / can't connect / can't open".
     r"|can\'?t\s*(connect|login|log\s*in|access|open|start|reach|sign\s*in|submit|press|click)"
     r"|cant\s*(connect|login|log\s*in|access|open|start|reach|sign\s*in|submit|press|click)"
     r"|unable\s*to\s*(connect|login|log\s*in|access|open|start|reach|sign\s*in|submit|click)"
-    # Submit / form / button specific Roman-Urdu trouble phrasings.
     r"|submit\s*(button)?\s*(nahi\s*ho|nahi\s*hota|nahi\s*hoti|nahi\s*ho\s*raha|nahi\s*ho\s*rahi)"
     r"|submit\s*(button)?\s*(fail(ed|s)?|stuck|hang|loading)"
     r"|(button|form)\s*(nahi\s*chal|nahi\s*kaam|nahi\s*khul|nahi\s*ho\s*raha)"
     r"|click\s*karne\s*(par|pe|ke\s*baad)"
-    # Connectivity / login / permission Roman Urdu.
     r"|connect\s*nahi\s*ho\s*raha|login\s*nahi\s*ho\s*raha|signin\s*nahi\s*ho\s*raha"
     r"|kaam\s*nahi\s*kar\s*raha|kaam\s*ni\s*kr\s*raha|kam\s*nahi\s*kr\s*raha"
     r"|permission\s*nahi\s*mil(ti|\s*rahi)?"
     r"|masla|msla|dikkat|pareshani"
-    # Help-me-fix verbs.
     r"|fix|troubleshoot|debug|help\s*me\s*(fix|solve)|theek\s*kar(o|na|do)|hal\s*karo"
 )
-# Price / quotation / commercial queries (English + Roman Urdu + SMS shorthands).
+
 _PRICE_WORDS = (
-    # ── direct price / cost asks ────────────────────────────────────────
     r"price|prices|pricing|cost|costs|charges?|fee|fees|rate|rates"
     r"|how\s*much|kitna\s*(hai|hoga|lagta|parta)|kitni\s*(hai|hogi|lagti|parti)"
     r"|kya\s*qeemat|kya\s*keemat|qeemat\s*kya|keemat\s*kya"
     r"|kitna\s*paisa|kitne\s*paise|kitna\s*rupees?|amount"
-    # ── quotation / estimate ─────────────────────────────────────────────
     r"|quot(e|ation)|quotations?|estimate|estimates?|proposal"
-    r"|qoute|qoutation"                          # common misspellings
+    r"|qoute|qoutation"
     r"|send\s*(me\s*)?(a\s*)?(quote|quotation|proposal|estimate)"
     r"|quote\s*(bhejo|karo|do|dein|send\s*karo)"
     r"|quotation\s*(chahiye|chahye|do|dein|bhejo|send\s*karo)"
-    # ── packages / plans / bundles ───────────────────────────────────────
     r"|package|packages|plan|plans|bundle|bundles"
     r"|monthly\s*(plan|package|cost|price|charges?)"
     r"|yearly\s*(plan|package|cost|price|charges?)"
     r"|annual\s*(plan|package|cost|price|charges?)"
     r"|subscription\s*(cost|price|charges?|fee)"
-    # ── discounts / deals / offers ───────────────────────────────────────
     r"|discount|discounts?|promo|promotion|offer|offers?|deal|deals?"
     r"|special\s*(price|offer|rate|deal)|best\s*price|last\s*price|final\s*price"
     r"|koi\s*(offer|discount|deal)\s*(hai|hy|h)?"
     r"|sale|clearance|reduced|reduction"
-    # ── affordability / budget ───────────────────────────────────────────
     r"|budget|affordable|reasonable|cheap|sasta|sasti|mehnga|mehngi|expensive"
     r"|value\s*for\s*money|cost[\s\-]?effective|economical"
-    # ── billing / invoice / tax ──────────────────────────────────────────
     r"|invoice|bill|receipt|billing|tax\s*invoice|gst|vat"
     r"|payment\s*(plan|schedule|option|method)"
     r"|installment|installments?|qist|qisti|emi"
     r"|advance|down\s*payment|partial\s*payment"
-    # ── trial / demo ─────────────────────────────────────────────────────
     r"|free\s*trial|trial\s*period|trial\s*available|demo\s*(available|chahiye|milega)"
     r"|try\s*for\s*free|kya\s*(free|trial|demo)\s*(hai|hy|milta|milti)?"
+    # Sales contact routing (from itcs_xtra.pdf)
+    r"|sales(\s*inquiry|\s*team|\s*email|\s*contact)?"
+    r"|sales@itcs|contact\s*sales|pricing\s*(email|contact|inquiry)"
 )
-# Compositional heuristic: a "loading / hang / stuck / not working / nothing
-# happens" verb co-occurring with a UI action ("submit / click / press / tap /
-# button / form / page / website") in either order is a clear trouble report.
-# We compile this once at module load and check it as an additional pass.
+
+# ---------------------------------------------------------------------------
+# NEW: Careers / HR intent words
+# Sourced from itcs_xtra.pdf canned responses covering: internship, job
+# application, CV submission, application status, HR contact.
+# ---------------------------------------------------------------------------
+_CAREERS_WORDS = (
+    # General job / career vocabulary
+    r"career|careers|job|jobs|vacancy|vacancies|opening|openings|position|role|roles"
+    r"|hire|hiring|recruitment|recruit|interview|screening"
+    r"|apply|application|apply\s*(for|online)|job\s*application|internship\s*application"
+    # CV / resume
+    r"|cv|resume|curriculum\s*vitae|cover\s*letter"
+    r"|submit\s*(my\s*)?(cv|resume)|send\s*(my\s*)?(cv|resume)"
+    r"|cv\s*(bhejo|send\s*karo|submit\s*karo|jama\s*karo)"
+    # Internship specific (primary entity from itcs_xtra.pdf)
+    r"|internship|intern|interns|internships"
+    r"|it\s*internship|internship\s*(at|in|for)?\s*itcs"
+    r"|summer\s*intern(ship)?|industrial\s*training|industrial\s*attachment"
+    # Fresh / entry level
+    r"|trainee|fresh\s*graduate|fresher|entry\s*level|graduate\s*(program|trainee)"
+    # Application status follow-up (itcs_xtra.pdf: "following up")
+    r"|application\s*status|status\s*of\s*my\s*(application|cv|resume)"
+    r"|follow\s*(up|ing)(\s*on\s*(my\s*)?(application|cv))?"
+    r"|haven\'?t\s*(heard|received|got)\s*(back|a\s*response|any\s*response)"
+    r"|no\s*response(\s*yet)?|waiting\s*for\s*response"
+    r"|shortlist(ed)?|selected|selection\s*process"
+    # Specific role mentioned in itcs_xtra.pdf
+    r"|building\s*management\s*system|bms(\s*role|\s*position|\s*job)?"
+    # HR contact (hrm@itcs.com.pk)
+    r"|hr(m)?(\s*team|\s*department|\s*contact|\s*email)?"
+    r"|hrm@itcs|human\s*resources"
+    # Career page
+    r"|career\s*page|careers\s*(page|portal|section|website)"
+    r"|job\s*(portal|listing|alert|post|board)|job\s*alert"
+    r"|itcs\.com\.pk/careers|itcs\s*careers"
+    # Experience / qualifications
+    r"|experience|exp|years\s*of\s*experience|skills\s*required|qualification|qualifications"
+    r"|salary|stipend|pay\s*scale|compensation"
+    r"|remote|onsite|on[\-\s]site|hybrid|wfh|work\s*from\s*home"
+    r"|notice\s*period|joining\s*date|start\s*date"
+    # Roman Urdu career phrases
+    r"|naukri|job\s*chahiye|job\s*chahye|internship\s*chahiye|internship\s*chahye"
+    r"|kaam\s*(chahiye|chahye)|rozgar|mulazmat"
+    r"|apply\s*karna|apply\s*kaise\s*(karein|karo|karen)"
+    r"|cv\s*kahan\s*(bhejein|bhejun|bhejoon|send\s*karein|send\s*karo)"
+)
+
+# ---------------------------------------------------------------------------
+# NEW: Products / Services intent words
+# Sourced from Products_Partners_Customers.pdf — covers all 8 service lines,
+# hardware, emerging solutions, and specific product names sold by ITCS.
+# ---------------------------------------------------------------------------
+_PRODUCTS_WORDS = (
+    # ── Generic product / service vocabulary ───────────────────────────
+    r"product|products|service|services|solution|solutions|offering|offerings"
+    r"|portfolio|catalogue|catalog|what\s*do\s*you\s*(sell|offer|provide)"
+    r"|khidmaat|khidmat|products?\s*(list|catalogue|catalog)"
+    # ── Service line 1: IT Infrastructure & Managed Services ───────────
+    r"|managed\s*(services?|it)|it\s*support|helpdesk|help\s*desk"
+    r"|onsite\s*support|offsite\s*support|remote\s*support"
+    r"|network\s*(management|monitoring|infrastructure)"
+    r"|data\s*(backup|recovery)|backup\s*(and\s*)?recovery|disaster\s*recovery|dr"
+    r"|break[\s\-]?fix|proactive\s*support|account\s*management"
+    # ── Service line 2: Cloud & Modern Workplace ────────────────────────
+    r"|cloud|hybrid\s*cloud|multi[\s\-]?cloud"
+    r"|microsoft\s*365|m365|office\s*365|o365"
+    r"|microsoft\s*azure|azure"
+    r"|google\s*cloud|gcp|aws|amazon\s*web\s*services"
+    r"|csp|cloud\s*solution\s*provider"
+    r"|modern\s*workplace|digital\s*workplace"
+    r"|microsoft\s*teams|teams|sharepoint|onedrive|exchange(\s*online)?"
+    r"|microsoft\s*copilot|copilot(\s*for\s*m365)?"
+    r"|power\s*bi|power\s*automate|power\s*apps|power\s*platform"
+    r"|dynamics\s*365|dynamics"
+    r"|microsoft\s*intune|intune|entra(\s*id)?|azure\s*ad|active\s*directory"
+    r"|microsoft\s*defender|defender(\s*for\s*(endpoint|office|identity))?"
+    # ── Service line 3: Cybersecurity ───────────────────────────────────
+    r"|cybersecurity|cyber\s*security|information\s*security|infosec"
+    r"|firewall|waf|ips|ids|intrusion\s*(prevention|detection)"
+    r"|vulnerability\s*assessment|pentest|penetration\s*testing|vapt"
+    r"|insightvm|nexpose|acunetix|burp(\s*suite)?|imperva|nessus"
+    r"|edr|xdr|endpoint\s*(detection|protection|security)"
+    r"|identity\s*(and\s*)?access|iam|zero\s*trust|ztna"
+    r"|siem|soc|threat\s*protection|threat\s*intelligence"
+    r"|fortinet|fortigate|fortiguard|forticare|fortiendpoint"
+    r"|sophos|barracuda|forcepoint|kaspersky|trendmicro|trend\s*micro"
+    r"|digicert|ssl(\s*certificate)?|tls|wildcard(\s*ssl)?"
+    r"|manageengine|solarwinds|paessler|prtg"
+    r"|veeam|acronis|backup\s*exec"
+    r"|symantec|mcafee|avast|bitdefender|eset|avg"
+    # ── Service line 4: Enterprise Solutions ────────────────────────────
+    r"|enterprise(\s*solution|\s*application|\s*integration)?"
+    r"|erp|hims|hospital\s*information|custom\s*(erp|application)"
+    r"|data\s*center(\s*virtualization|\s*design)?"
+    r"|virtualization|vmware|hyper[\s\-]?v|vsphere|vcenter"
+    r"|digital\s*transformation|business\s*application"
+    # ── Service line 5: Network Infrastructure ──────────────────────────
+    r"|lan|wan|wi[\s\-]?fi|wifi|wireless(\s*network|\s*access\s*point)?"
+    r"|vpn|ip\s*telephony|voip|call\s*center(\s*solution)?"
+    r"|pbx|ip\s*pbx|sip|cisco(\s*(router|switch|meraki|catalyst))?"
+    r"|d[\s\-]link|tp[\s\-]link|ubiquiti|unifi|reyee"
+    r"|switch(es)?|router(s)?|access\s*point(s)?|ap"
+    # ── Service line 6: Software Development ────────────────────────────
+    r"|software\s*development|custom\s*(software|development|app)"
+    r"|web\s*(development|hosting|application)|saas"
+    r"|application\s*development|mobile\s*(app|development)"
+    # ── Service line 7: Consulting & Professional Services ───────────────
+    r"|it\s*consulting|digital\s*transformation\s*advisory"
+    r"|it\s*audit|forensic\s*audit|system\s*integration"
+    r"|migration|re[\s\-]?engineering|professional\s*services"
+    # ── Service line 8: Data Center & Platform ──────────────────────────
+    r"|data\s*center|storage(\s*(solution|array|server))?"
+    r"|high\s*availability|ha|compute(\s*infrastructure)?"
+    r"|server(s)?|rack(s)?|ups(\s*(unit|solution))?"
+    r"|lenovo|dell(\s*(server|laptop|desktop|poweredge))?"
+    r"|hp(\s*(server|laptop|printer|elitebook|probook))?"
+    # ── Hardware & product names ─────────────────────────────────────────
+    r"|desktop(\s*pc)?|laptop(s)?|printer(s)?|scanner(s)?|led(\s*screen)?"
+    r"|ip\s*phone|grandstream|atcom|dinstar|openvo"
+    r"|hikvision|dahua|cctv|nvr|dvr|camera(\s*solution)?"
+    r"|rfid|iot|smart\s*sensor(s)?"
+    # ── Specific products from PDF product list ──────────────────────────
+    r"|microsoft\s*365\s*(business\s*(basic|standard|premium)|e3|e5|f1|apps)"
+    r"|office\s*365(\s*(e1|e3|e5|f3|a1|a3|a5))?"
+    r"|windows\s*server(\s*20(16|19|22|25))?"
+    r"|sql\s*server(\s*20(14|17|19|22|25))?"
+    r"|visio|project(\s*(plan|online|professional|standard))?"
+    r"|exchange(\s*(online|server))?"
+    r"|godaddy|namecheap|domain(\s*(registration|renewal))?"
+    r"|cpanel|plesk|web\s*hosting|vps(\s*hosting)?"
+    r"|teamviewer|anydesk|zoom(\s*(workplace|pro|business))?"
+    r"|adobe(\s*(acrobat|creative\s*cloud|photoshop|illustrator|sign))?"
+    r"|canva|grammarly|figma|slack|notion"
+    r"|solarwinds(\s*(npm|sam|siem|ipam|ncm|nta|ha|ntm))?"
+    r"|gpu\s*(vps|cloud|server)|rtx\s*5090|ai\s*(server|workload)"
+    r"|microsoft\s*copilot\s*studio|copilot\s*studio"
+    r"|dynamics\s*365\s*business\s*central"
+    r"|microsoft\s*viva|viva(\s*suite)?"
+    r"|azure\s*(virtual\s*machine|vm|devops|active\s*directory)"
+    r"|microsoft\s*(intune|entra|sentinel|purview)"
+)
+
+# ---------------------------------------------------------------------------
+# NEW: Partners intent words
+# Sourced from Products_Partners_Customers.pdf — Technology Partners section.
+# ---------------------------------------------------------------------------
+_PARTNERS_WORDS = (
+    r"partner(s)?|technology\s*partner(s)?|vendor(s)?|oem|reseller"
+    r"|strategic\s*partner|alliance(s)?|authorized(\s*partner|\s*reseller)?"
+    r"|partner\s*(list|details|info|network|ecosystem)"
+    r"|who\s*(are\s*your|do\s*you\s*partner\s*with|are\s*itcs)\s*partner"
+    # Named partners from PDF
+    r"|microsoft(\s*(partner|csp|gold|silver|tier\s*1))?"
+    r"|adobe(\s*partner)?"
+    r"|fortinet(\s*partner)?"
+    r"|sophos(\s*partner)?"
+    r"|barracuda(\s*partner)?"
+    r"|forcepoint|kaspersky(\s*partner)?"
+    r"|digicert(\s*partner)?"
+    r"|trendmicro|trend\s*micro(\s*partner)?"
+    r"|manageengine(\s*partner)?"
+    r"|microsoft\s*azure(\s*partner)?"
+    r"|amazon\s*web\s*services|aws(\s*partner)?"
+    r"|google\s*cloud(\s*partner)?"
+    r"|sky47|data\s*vault(\s*partner)?"
+    r"|lenovo(\s*partner)?"
+    r"|qsan|dell(\s*partner)?"
+    r"|mailstore|devart"
+    r"|cisco(\s*partner)?"
+    r"|veeam(\s*partner)?"
+    r"|solutions\s*partner\s*(modern\s*workplace|azure\s*infrastructure)"
+    r"|tier\s*1\s*(direct\s*)?csp|direct\s*csp"
+)
+
+# ---------------------------------------------------------------------------
+# NEW: Customers intent words
+# Sourced from Products_Partners_Customers.pdf — Customers section.
+# ---------------------------------------------------------------------------
+_CUSTOMERS_WORDS = (
+    r"customer(s)?|client(s)?|clientele"
+    r"|who\s*(are\s*(your|itcs)|do\s*you\s*work\s*with)\s*(client|customer)"
+    r"|customer\s*(list|base|portfolio|reference(s)?)"
+    r"|client\s*(list|portfolio|reference(s)?|base)"
+    r"|reference(s)?(\s*client|\s*customer)?"
+    r"|case\s*stud(y|ies)|success\s*stor(y|ies)"
+    r"|itcs\s*(clients|customers|worked\s*with)"
+    # Named customers / sectors from PDF
+    r"|fauji\s*fertilizer|oil\s*&?\s*gas\s*development|ogdc|mari\s*energy"
+    r"|pakistan\s*suzuki|zameen|gul\s*ahmed"
+    r"|national\s*telecommunication|national\s*assembly|fmu|financial\s*monitoring"
+    r"|punjab\s*skills|pakistan\s*engineering\s*council|plra"
+    r"|pakistan\s*navy|cppa[\s\-]g"
+    r"|comsats|bahria\s*university|rawalpindi\s*medical|virtual\s*university"
+    r"|first\s*women\s*bank|js\s*bank|hbl\s*microfinance|bank\s*islami|summit\s*bank"
+    r"|zong|cmpak|nayatel|wateen|warid"
+    r"|usaid|unops|akhuwat"
+    r"|getz\s*pharma|brookes\s*pharma|scilife|galaxy\s*pharma|searle"
+    # Sector-level queries
+    r"(government|public\s*sector)\s*(client|customer|project)"
+    r"|(banking|financial\s*sector)\s*(client|customer)"
+    r"|(education|university|school)\s*(client|customer)"
+    r"|(telecom|ngo|pharma|healthcare)\s*(client|customer)"
+    r"|enterprise\s*(client|customer)"
+)
+
 _TROUBLE_COMPOSITIONAL = re.compile(
     r"\b(loading|loads?|hang(s|ing|ed)?|stuck|frozen|crash(es|ed|ing)?"
     r"|nothing\s*happen(s|ing)?|kuch\s*(nahi|ni)|fails?|won\'?t|wont"
@@ -275,7 +464,6 @@ _TROUBLE_COMPOSITIONAL = re.compile(
     re.IGNORECASE,
 )
 
-# Phrases that escalate to a human / live agent / customer-care channel.
 _HUMAN_HANDOFF_WORDS = (
     r"human|agent|representative|real\s*person|operator|customer\s*care"
     r"|live\s*(agent|support|chat|person|operator)"
@@ -287,14 +475,6 @@ _HUMAN_HANDOFF_WORDS = (
     r"|(escalate|escalation)|manager|supervisor|senior(\s*support)?|higher\s*support"
 )
 
-# Phrases that ask the bot to provide ITCS contact details or office
-# addresses. Keep "where are you / where is your office / located / based /
-# situated / locations / branches / city / cities" entries here so
-# location-style questions ("Where are you located?", "Do you have an
-# office in Lahore?", "What is your address?") all route to the
-# PROVIDE_CONTACT_INFO intent and return the full street addresses
-# instead of falling through to a generic ASK_FACTUAL/RAG answer that
-# would only list the cities.
 _CONTACT_WORDS = (
     r"contact(\s*info|\s*details|\s*us|\s*number)?"
     r"|phone(\s*number)?|whatsapp(\s*number)?|mobile(\s*number)?"
@@ -312,9 +492,11 @@ _CONTACT_WORDS = (
     r"|reach\s*(you|itcs|out\s*to\s*you)|get\s*in\s*touch"
     r"|support\s*(email|number|line)|helpline|uan"
     r"|raabta|rabta"
+    # Specific email addresses from PDFs
+    r"|info@itcs|sales@itcs|hrm@itcs|m\.awais@itcs"
+    r"|itcs\s*(email|contact|number|phone)"
 )
 
-# Session-reset / end-chat phrases.
 _RESET_WORDS = (
     r"(reset|restart|clear|wipe)\s*(the\s*|this\s*|our\s*)?(chat|conversation|session|history|context|memory)"
     r"|(reset|restart|clear)\s*(kar\s*do|kr\s*do|kar\s*dein)"
@@ -325,7 +507,6 @@ _RESET_WORDS = (
     r"|end\s*chat|close\s*chat|exit\s*chat|exit\s*conversation"
 )
 
-# Compliments / positive feedback.
 _COMPLIMENT_WORDS = (
     r"you\s*(\'?re|are)\s*(so\s*|really\s*|very\s*)?"
     r"(great|awesome|amazing|helpful|smart|the\s*best|good|wonderful|brilliant|fantastic|perfect)"
@@ -334,7 +515,6 @@ _COMPLIMENT_WORDS = (
     r"|well\s*done|impressive|love\s*(you|this\s*bot)"
 )
 
-# Identity probes ("who are you?").
 _IDENTITY_WORDS = (
     r"^(who|what)\s*(are|r)\s*(you|u)\b"
     r"|\bwhat\s*is\s*your\s*name\b|\btumhara\s*naam\s*kya\s*hai\b"
@@ -343,7 +523,6 @@ _IDENTITY_WORDS = (
     r"|\b(tum|aap)\s*(kon|kaun)\s*(ho|hain)\b"
 )
 
-# Capability probes ("what can you do?").
 _CAPABILITY_WORDS = (
     r"\bwhat\s*can\s*you\s*do\b"
     r"|\bwhat\s*(do|are)\s*you\s*(able\s*to\s*do|capable\s*of)\b"
@@ -356,13 +535,15 @@ _CAPABILITY_WORDS = (
 
 
 # ---------------------------------------------------------------------------
-# Order matters: patterns are evaluated top-to-bottom and the first match wins.
-# More specific intents should appear before more generic ones.
+# Intent pattern list — order matters: first match wins.
+# More specific intents must appear before more generic ones.
+# NEW intents (ASK_CAREERS, ASK_PRODUCTS, ASK_PARTNERS, ASK_CUSTOMERS) are
+# placed BEFORE the generic ASK_FACTUAL / ASK_DEFINITION fallbacks so that
+# domain-specific vocabulary routes correctly even when the user asks with
+# "what is" / "tell me about" framing.
 # ---------------------------------------------------------------------------
 _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     # ---- Session reset (check early; resets override other cues) ---------
-    # Must refer to the chat/conversation/context itself, not user data like
-    # passwords or settings.
     (Intent.SESSION_RESET, _p(rf"\b({_RESET_WORDS})\b")),
 
     # ---- Human handoff ---------------------------------------------------
@@ -399,16 +580,33 @@ _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     )),
 
     # ---- Confirm understanding -------------------------------------------
-    (Intent.CONFIRM_UNDERSTANDING, _p(r"\b(do\s*you\s*understand|did\s*you\s*(get|understand)\s*(that|me)|does\s*that\s*make\s*sense|are\s*we\s*(clear|on\s*the\s*same\s*page)|got\s*it\??)\b")),
+    (Intent.CONFIRM_UNDERSTANDING, _p(
+        r"\b(do\s*you\s*understand|did\s*you\s*(get|understand)\s*(that|me)"
+        r"|does\s*that\s*make\s*sense|are\s*we\s*(clear|on\s*the\s*same\s*page)"
+        r"|got\s*it\??)\b"
+    )),
 
     # ---- Confirm entities ------------------------------------------------
-    (Intent.CONFIRM_ENTITIES, _p(r"\b(is\s*that\s*(correct|right)|did\s*i\s*(say|get)\s*that\s*right|is\s*this\s*what\s*you\s*mean(t)?|are\s*these\s*(details|entities)\s*(correct|right)|please\s*confirm|tasdeeq)\b")),
+    (Intent.CONFIRM_ENTITIES, _p(
+        r"\b(is\s*that\s*(correct|right)|did\s*i\s*(say|get)\s*that\s*right"
+        r"|is\s*this\s*what\s*you\s*mean(t)?|are\s*these\s*(details|entities)\s*(correct|right)"
+        r"|please\s*confirm|tasdeeq)\b"
+    )),
 
     # ---- Disambiguate entity --------------------------------------------
-    (Intent.DISAMBIGUATE_ENTITY, _p(r"\bwhich\s*(one|of\s*(them|these|those))\b|\bdo\s*you\s*mean\b|\b(do\s*you\s*mean|are\s*you\s*referring\s*to)\b|\bwhich\s*(product|service|option|plan)\b|\bkonsa\s*wala\b")),
+    (Intent.DISAMBIGUATE_ENTITY, _p(
+        r"\bwhich\s*(one|of\s*(them|these|those))\b|\bdo\s*you\s*mean\b"
+        r"|\b(do\s*you\s*mean|are\s*you\s*referring\s*to)\b"
+        r"|\bwhich\s*(product|service|option|plan)\b|\bkonsa\s*wala\b"
+    )),
 
     # ---- Contradiction resolution ---------------------------------------
-    (Intent.CONTRADICTION_RESOLUTION, _p(r"\b(that\s*contradicts|but\s*(earlier|before|previously)\s*you\s*said|you\s*(just\s*)?said\s*.*\s*(different|opposite|otherwise)|that\'?s?\s*(inconsistent|contradictory)|this\s*doesn\'?t\s*match\s*what\s*you\s*said)\b")),
+    (Intent.CONTRADICTION_RESOLUTION, _p(
+        r"\b(that\s*contradicts|but\s*(earlier|before|previously)\s*you\s*said"
+        r"|you\s*(just\s*)?said\s*.*\s*(different|opposite|otherwise)"
+        r"|that\'?s?\s*(inconsistent|contradictory)"
+        r"|this\s*doesn\'?t\s*match\s*what\s*you\s*said)\b"
+    )),
 
     # ---- Clarify user request -------------------------------------------
     (Intent.CLARIFY_USER_REQUEST, _p(
@@ -422,25 +620,67 @@ _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     )),
 
     # ---- Sort ------------------------------------------------------------
-    (Intent.SORT, _p(r"\b(sort|order|rank|arrange|organize|organise)\s*(by|them|these|those|it|results|list)?\b|\b(in\s*(ascending|descending|alphabetical|chronological)\s*order)\b|\b(cheapest|most\s*expensive|highest|lowest|newest|oldest)\s*first\b")),
-
-    # ---- Ask comparison --------------------------------------------------
-    (Intent.ASK_COMPARISON, _p(r"\b(compare|comparison|vs\.?|versus|difference\s*between|differences\s*between|which\s*is\s*(better|best)|pros\s*and\s*cons|better\s*than|farq\s*(kya|kia))\b")),
-
-    # ---- Ask recommendation ---------------------------------------------
-    (Intent.ASK_RECOMMENDATION, _p(r"\b(recommend|suggest|suggestion|what\s*(do|would)\s*you\s*(recommend|suggest)|which\s*(should|would)\s*i\s*(use|choose|pick)|best\s*(option|choice|fit|one)\s*for|mashwara)\b")),
+    (Intent.SORT, _p(
+        r"\b(sort|order|rank|arrange|organize|organise)\s*(by|them|these|those|it|results|list)?\b"
+        r"|\b(in\s*(ascending|descending|alphabetical|chronological)\s*order)\b"
+        r"|\b(cheapest|most\s*expensive|highest|lowest|newest|oldest)\s*first\b"
+    )),
 
     # ---- Ask troubleshooting --------------------------------------------
     (Intent.ASK_TROUBLESHOOTING, _p(rf"\b({_TROUBLE_WORDS})\b")),
 
+    # ---- Ask price / quotation ------------------------------------------
+    # Must precede ASK_COMPARISON to capture "best price" before "best X" triggers comparison.
+    (Intent.ASK_PRICE, _p(rf"\b({_PRICE_WORDS})\b")),
+
+    # ---- Ask comparison --------------------------------------------------
+    (Intent.ASK_COMPARISON, _p(
+        r"\b(compare|comparison|vs\.?|versus|difference\s*between|differences\s*between"
+        r"|which\s*is\s*(better|best)|pros\s*and\s*cons|better\s*than|farq\s*(kya|kia))\b"
+    )),
+
+    # ---- Ask recommendation ---------------------------------------------
+    (Intent.ASK_RECOMMENDATION, _p(
+        r"\b(recommend|suggest|suggestion|what\s*(do|would)\s*you\s*(recommend|suggest)"
+        r"|which\s*(should|would)\s*i\s*(use|choose|pick)|best\s*(option|choice|fit|one)\s*for"
+        r"|mashwara)\b"
+    )),
+
+    # ---- NEW: Ask careers / HR ------------------------------------------
+    # Placed before ASK_FACTUAL / ASK_DEFINITION so "what is the internship
+    # process?" routes here, not to generic factual.
+    (Intent.ASK_CAREERS, _p(rf"\b({_CAREERS_WORDS})\b")),
+
+    # ---- NEW: Ask partners ----------------------------------------------
+    # Placed before ASK_PRODUCTS to resolve "Microsoft partner" → partners,
+    # not products.
+    (Intent.ASK_PARTNERS, _p(rf"\b({_PARTNERS_WORDS})\b")),
+
+    # ---- NEW: Ask products / services -----------------------------------
+    (Intent.ASK_PRODUCTS, _p(rf"\b({_PRODUCTS_WORDS})\b")),
+
+    # ---- NEW: Ask customers / clients -----------------------------------
+    (Intent.ASK_CUSTOMERS, _p(rf"\b({_CUSTOMERS_WORDS})\b")),
+
     # ---- Ask definition --------------------------------------------------
-    (Intent.ASK_DEFINITION, _p(r"^(what\s*(is|are|does)\s*(a|an|the)?\s*)|\bdefine\b|\bdefinition\s*of\b|\bmeaning\s*of\b|\bwhat\s*does\s*.*\s*mean\b")),
+    (Intent.ASK_DEFINITION, _p(
+        r"^(what\s*(is|are|does)\s*(a|an|the)?\s*)|\bdefine\b|\bdefinition\s*of\b"
+        r"|\bmeaning\s*of\b|\bwhat\s*does\s*.*\s*mean\b"
+    )),
 
     # ---- Ask procedural question ----------------------------------------
-    (Intent.ASK_PROCEDURAL, _p(r"^how\s*(do|can|to|should|would)\s*(i|you|we|one)?\b|\bsteps?\s*to\b|\bguide\s*(me\s*)?(on|to|through)\b|\bwalk\s*me\s*through\b|\btutorial\b|\binstructions?\s*(for|on)\b|\bstep\s*by\s*step\b|\brehnumai\b")),
+    (Intent.ASK_PROCEDURAL, _p(
+        r"^how\s*(do|can|to|should|would)\s*(i|you|we|one)?\b"
+        r"|\bsteps?\s*to\b|\bguide\s*(me\s*)?(on|to|through)\b"
+        r"|\bwalk\s*me\s*through\b|\btutorial\b"
+        r"|\binstructions?\s*(for|on)\b|\bstep\s*by\s*step\b|\brehnumai\b"
+    )),
 
     # ---- Ask factual question -------------------------------------------
-    (Intent.ASK_FACTUAL, _p(r"^(who|what|when|where|why|which|how\s*(many|much|long|often|old))\b|\bis\s*it\s*true\b|\btell\s*me\s*(about|the)\b")),
+    (Intent.ASK_FACTUAL, _p(
+        r"^(who|what|when|where|why|which|how\s*(many|much|long|often|old))\b"
+        r"|\bis\s*it\s*true\b|\btell\s*me\s*(about|the)\b"
+    )),
 
     # ---- Compliment ------------------------------------------------------
     (Intent.COMPLIMENT, _p(_COMPLIMENT_WORDS)),
@@ -449,7 +689,11 @@ _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     (Intent.COMPLAINT, _p(rf"\b({_COMPLAINT_WORDS})\b")),
 
     # ---- Feedback --------------------------------------------------------
-    (Intent.FEEDBACK, _p(r"\b(feedback|suggestion\s*for\s*you|(i\s*have|here\'?s)\s*(some\s*)?feedback|you\s*should\s*(improve|add|fix)|it\s*would\s*be\s*(better|nice|great)\s*if|please\s*(improve|consider))\b")),
+    (Intent.FEEDBACK, _p(
+        r"\b(feedback|suggestion\s*for\s*you|(i\s*have|here\'?s)\s*(some\s*)?feedback"
+        r"|you\s*should\s*(improve|add|fix)|it\s*would\s*be\s*(better|nice|great)\s*if"
+        r"|please\s*(improve|consider))\b"
+    )),
 
     # ---- Apology ---------------------------------------------------------
     (Intent.APOLOGY, _p(rf"^({_APOLOGY_WORDS})\b")),
@@ -457,13 +701,7 @@ _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     # ---- Appreciation / thanks ------------------------------------------
     (Intent.APPRECIATION, _p(rf"^({_THANKS_WORDS})\b")),
 
-    # ---- Short affirmation ("yes", "haan", "sure", "please do", "go ahead")
-    # These almost always answer a yes/no offer the bot just made
-    # (e.g. "Would you like help connecting with sales?" -> "yes").
-    # Route to the regular LLM-with-history path so the model reads the
-    # offer from prior turns and fulfils it - never to the canned
-    # "You're welcome" reply. Must be matched BEFORE the bare-ack
-    # pattern below.
+    # ---- Short affirmation -----------------------------------------------
     (Intent.AFFIRMATION, _p(
         r"^("
         r"yes|yess+|yup|yep|yeah|y"
@@ -479,12 +717,7 @@ _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
         r")\s*[.!?]*$"
     )),
 
-    # ---- Short bare acknowledgements ("ok", "theek", "sahi", "noted", ...)
-    # Pure acknowledgements that follow a successful answer. Route to
-    # APPRECIATION so the bot acknowledges naturally instead of firing
-    # the "I didn't understand" fallback. Yes/sure/please tokens have
-    # been moved to the AFFIRMATION pattern above because they almost
-    # always answer an open offer rather than expressing thanks.
+    # ---- Short bare acknowledgements ------------------------------------
     (Intent.APPRECIATION, _p(
         r"^("
         r"ok|okay|okey|k|kk|kay"
@@ -507,27 +740,11 @@ _INTENT_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
         r"|^(what\'?s?\s*up|sup|how\s*is\s*it\s*going|how\'?s?\s*it\s*going)\b"
         rf"|^({_GREETING_HOW_ARE_YOU})\b"
     )),
-
-    # In the _INTENT_PATTERNS list, REPLACE this existing entry:
-    (Intent.ASK_COMPARISON, _p(r"\b(compare|comparison|vs\.?|versus| ... )\b")),
-
-# WITH these two entries (price first, then comparison):
-    # ---- Ask price / quotation ------------------------------------------
-    (Intent.ASK_PRICE, _p(rf"\b({_PRICE_WORDS})\b")),
-
-    # ---- Ask comparison --------------------------------------------------
-    (Intent.ASK_COMPARISON, _p(r"\b(compare|comparison|vs\.?|versus|difference\s*between|differences\s*between|which\s*is\s*(better|best)|pros\s*and\s*cons|better\s*than|farq\s*(kya|kia))\b")),
 ]
 
 
 # ---------------------------------------------------------------------------
-# Knowledge-signal fallback vocabulary.
-#
-# When no explicit intent regex above matches, we still want to route obvious
-# information / support / shopping / careers / IT questions to the RAG layer
-# instead of dead-ending at FALLBACK. This is deliberately broad and covers
-# English, broken English, SMS shorthand, common Roman Urdu, and ITCS-specific
-# topical vocabulary (cloud, M365, networking, careers, payments, etc.).
+# Knowledge-signal fallback vocabulary — enriched with new entities.
 # ---------------------------------------------------------------------------
 _KNOWLEDGE_SIGNALS = re.compile(
     r"\b("
@@ -605,13 +822,31 @@ _KNOWLEDGE_SIGNALS = re.compile(
     r"|sync|refresh|cache(\s*clear)?|cookies"
     r"|configuration|config|settings|setup|install|uninstall|reinstall"
     r"|error\s*code|401|403|404|500|502|503"
-    # ── careers / hiring ────────────────────────────────────────────────
-    r"|career|careers|job|jobs|vacancy|vacancies|opening|openings|position|role"
+    # ── NEW: ITCS-specific product / vendor signals ─────────────────────
+    r"|fortinet|fortigate|sophos|barracuda|kaspersky|trendmicro|digicert"
+    r"|veeam|solarwinds|manageengine|acunetix|nessus|insightvm|nexpose|burp"
+    r"|lenovo|cisco|hikvision|dahua|cctv|rfid|iot|voip|pbx|atcom|dinstar"
+    r"|adobe|canva|zoom|teamviewer|anydesk|grammarly|figma"
+    r"|godaddy|namecheap|cpanel|plesk|vps"
+    r"|vmware|vsphere|vcenter|hyper[\-\s]?v"
+    r"|gpu|rtx|ai\s*(server|workload|solution)"
+    r"|power\s*bi|power\s*automate|power\s*apps|dynamics\s*365|viva"
+    r"|intune|entra|sentinel|purview|defender"
+    r"|microsoft\s*365\s*(business|enterprise|education)"
+    r"|azure\s*(vm|devops|ad|active\s*directory|sentinel)"
+    # ── NEW: Careers / HR signals ───────────────────────────────────────
+    r"|internship|intern|cv|resume|apply|application|vacancy|vacancies|hiring"
+    r"|career|careers|job|jobs|hrm@itcs|hrm|hr\s*team|human\s*resources"
+    r"|shortlist|selected|rejection|fresh\s*graduate|fresher|trainee"
+    r"|building\s*management\s*system|bms"
+    # ── NEW: Partner / customer signals ─────────────────────────────────
+    r"|partner|partners|vendor|oem|reseller|authorized\s*partner"
+    r"|client|clients|customer|customers|clientele|reference"
+    r"|case\s*study|success\s*story|portfolio"
+    # ── careers / hiring (original) ─────────────────────────────────────
     r"|hire|hiring|recruitment|interview|screening"
-    r"|apply|application|cv|resume|cover\s*letter"
-    r"|internship|intern|trainee|fresh\s*graduate|fresher|entry\s*level"
-    r"|experience|exp|years|skills|qualification|qualifications"
-    r"|salary|stipend|pay|package"
+    r"|cover\s*letter|internship"
+    r"|salary|stipend|pay\s*scale"
     r"|remote|onsite|on[\-\s]site|hybrid|wfh|work\s*from\s*home"
     r"|notice\s*period|joining|start\s*date"
     r"|career\s*path|growth|promotion|hr|human\s*resources|team\s*lead|manager"
@@ -640,9 +875,6 @@ _KNOWLEDGE_SIGNALS = re.compile(
 )
 
 
-# Topics the bot is allowed to answer about. If the user asks about something
-# obviously unrelated (weather, sports, celebrity gossip, etc.) we mark it as
-# out-of-scope so the chat layer can respond appropriately.
 _OUT_OF_SCOPE_PATTERNS: list[re.Pattern[str]] = [
     _p(r"\b(weather|forecast|temperature\s*(today|tomorrow|outside))\b"),
     _p(r"\b(stock\s*price|crypto\s*price|bitcoin\s*price)\b"),
@@ -653,17 +885,15 @@ _OUT_OF_SCOPE_PATTERNS: list[re.Pattern[str]] = [
 
 
 def classify_intent(text: str) -> Intent:
-    """Classify *text* (English, lowercased internally) into an :class:`Intent`.
+    """Classify *text* into an :class:`Intent`.
 
-    Returns :attr:`Intent.FALLBACK` for empty input and :attr:`Intent.OUT_OF_SCOPE`
-    for messages that clearly fall outside the ITCS support domain.
+    Returns :attr:`Intent.FALLBACK` for empty input and
+    :attr:`Intent.OUT_OF_SCOPE` for messages outside the ITCS domain.
     """
     cleaned = (text or "").strip()
     if not cleaned:
         return Intent.FALLBACK
 
-    # Topic-based out-of-scope wins over syntactic patterns: "what is the
-    # weather" parses as a definition question but is not in-domain.
     for pattern in _OUT_OF_SCOPE_PATTERNS:
         if pattern.search(cleaned):
             return Intent.OUT_OF_SCOPE
@@ -672,11 +902,6 @@ def classify_intent(text: str) -> Intent:
         if pattern.search(cleaned):
             return intent
 
-    # Compositional trouble heuristic: loading / hang / stuck / "not
-    # working" / "nothing happens" co-occurring with a UI action like
-    # submit / click / button / form / page catches phrases that the
-    # word-list alone misses, e.g. "your website is loading when I
-    # click submit", "page keeps loading after submit".
     if _TROUBLE_COMPOSITIONAL.search(cleaned):
         return Intent.ASK_TROUBLESHOOTING
 

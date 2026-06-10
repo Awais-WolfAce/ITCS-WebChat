@@ -369,6 +369,14 @@ SYSTEM_PROMPT = (
     "Formatting:\n"
     "- Plain text by default.\n"
     "- Use bullet points only when it improves clarity."
+    "Product & Service Availability:\n"
+    "- ITCS sells, licenses, and resells all products, software, and hardware "
+    "that appear in the retrieved documents. If a product name appears anywhere "
+    "in the retrieved data, confirm that ITCS offers it and direct the user to "
+    "sales@itcs.com.pk for pricing or availability details.\n"
+    "- Do NOT say a product is unavailable or unknown simply because no "
+    "descriptive sentence about it was retrieved. A product name in a list "
+    "is sufficient to confirm ITCS deals in it.\n\n"
 )
 
 CHITCHAT_PROMPT = (
@@ -458,6 +466,18 @@ CANNED_RESPONSES: dict[str, str] = {
     "fallback": (
         "I'm not quite sure I understood that. Could you rephrase your "
         "question about ITCS services?"
+    ),
+    # In CANNED_RESPONSES dict, add these two entries:
+
+    "ask_price": (
+        "For pricing inquiries, please contact sales@itcs.com.pk via email. "
+        "Kindly ensure that info@itcs.com.pk and m.awais@itcs.com.pk are "
+        "included in CC to avoid any delay or oversight in response."
+    ),
+    "ask_careers": (
+        "To apply for a job or internship at ITCS, please submit your CV to "
+    "hrm@itcs.com.pk or visit {ITCS_CAREERS_URL}\n"
+    "Our HR team will contact you if you are shortlisted."
     ),
 }
 

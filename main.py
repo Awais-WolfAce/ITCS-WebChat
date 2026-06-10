@@ -39,6 +39,8 @@ CANNED_INTENTS: frozenset[Intent] = frozenset(
         Intent.PROVIDE_CONTACT_INFO,
         Intent.OUT_OF_SCOPE,
         Intent.FALLBACK,
+        Intent.ASK_CAREERS,  
+        Intent.ASK_PRICE,    
     }
 )
 
